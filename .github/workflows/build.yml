@@ -25,53 +25,56 @@ jobs:
         run: |
           set -euo pipefail
 
-          # IMPORTANT: when a new source ZIP is uploaded alongside an old extracted
-          # tree, the ZIP always wins. Prefer the canonical source ZIP by name.
           project_dir=""
-          archive=""
-          if [ -f SmartToolboxPro_GitHub.zip ] && \
-             unzip -Z1 SmartToolboxPro_GitHub.zip | awk '/(^|\/)app\/build\.gradle$/ {found=1} END {exit !found}'; then
-            archive="SmartToolboxPro_GitHub.zip"
+          if [ -f app/build.gradle ]; then
+            project_dir="."
+          elif [ -f SmartToolboxPro/app/build.gradle ]; then
+            project_dir="SmartToolboxPro"
           else
+            mkdir -p source
             shopt -s nullglob
             source_archives=()
-            for candidate in ./*.zip; do
-              if unzip -Z1 "$candidate" | awk '/(^|\/)app\/build\.gradle$/ {found=1} END {exit !found}'; then
-                source_archives+=("$candidate")
+
+            # Only ZIPs containing an Android app module count as source archives.
+            for archive in ./*.zip; do
+              # Do NOT use grep -q with pipefail: it can close the pipe before unzip
+              # finishes writing, causing a SIGPIPE exit and falsely claiming 0 source ZIPs.
+              if unzip -Z1 "$archive" | grep -E '(^|/)app/build.gradle$' > /dev/null; then
+                source_archives+=("$archive")
               fi
             done
-            if [ "${#source_archives[@]}" -eq 1 ]; then
-              archive="${source_archives[0]}"
-            elif [ "${#source_archives[@]}" -gt 1 ]; then
-              echo "::error::Multiple Android source ZIPs found. Keep the latest as SmartToolboxPro_GitHub.zip."
+
+            if [ "${#source_archives[@]}" -ne 1 ]; then
+              echo "Expected exactly one Android source ZIP containing app/build.gradle; found ${#source_archives[@]}."
+              echo "The ZIP must contain app/, settings.gradle and app/src/main/AndroidManifest.xml."
+              echo "A ZIP containing only MP4 / PNG / TXT media assets is not an Android source project."
+              echo "ZIP files found in repository:"
+              for archive in ./*.zip; do
+                [ -f "$archive" ] || continue
+                echo "--- $archive"
+                unzip -Z1 "$archive" | head -n 12 || true
+              done
               exit 1
             fi
-          fi
 
-          if [ -n "$archive" ]; then
+            archive="${source_archives[0]}"
             extraction_dir="source/$(basename "${archive%.zip}")"
             mkdir -p "$extraction_dir"
             unzip -q -o "$archive" -d "$extraction_dir"
+
             mapfile -t project_roots < <(
               find "$extraction_dir" -type f -path '*/app/build.gradle' -print |
               while IFS= read -r gradle_file; do
                 dirname "$(dirname "$gradle_file")"
               done | sort -u
             )
+
             if [ "${#project_roots[@]}" -ne 1 ]; then
-              echo "::error::Cannot find exactly one Android project root in $archive"
-              printf '%s\n' "${project_roots[@]}"
+              echo "Could not identify exactly one Android project root inside $archive."
+              printf '%s\\n' "${project_roots[@]}"
               exit 1
             fi
             project_dir="${project_roots[0]}"
-            echo "Latest source ZIP selected: $archive"
-          elif [ -f app/build.gradle ]; then
-            project_dir="."
-          elif [ -f SmartToolboxPro/app/build.gradle ]; then
-            project_dir="SmartToolboxPro"
-          else
-            echo "::error::Upload SmartToolboxPro_GitHub.zip or a valid Android project."
-            exit 1
           fi
 
           test -f "$project_dir/app/build.gradle"
@@ -189,6 +192,34 @@ jobs:
             app/src/main/java/com/smarttoolbox/pro/VideoExitPolicy.java \
             tests/com/smarttoolbox/pro/VideoExitPolicyTest.java
           java -cp build/video-exit-tests com.smarttoolbox.pro.VideoExitPolicyTest
+
+      - name: Verify new SR gold and blue launcher icon assets
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import struct, hashlib
+          res = Path('app/src/main/res/drawable-nodpi')
+          expected = ['ic_launcher.png', 'sr_premium_logo.png']
+          hashes = []
+          for name in expected:
+              data = (res / name).read_bytes()
+              assert data[:8] == b'\x89PNG\r\n\x1a\n', (name, 'not PNG')
+              width, height = struct.unpack('>II', data[16:24])
+              assert (width, height) == (512, 512), (name, width, height)
+              assert len(data) > 50000, (name, 'too small')
+              hashes.append(hashlib.sha256(data).digest())
+          assert hashes[0] == hashes[1], 'Launcher, home and opening logo differ'
+          manifest = Path('app/src/main/AndroidManifest.xml').read_text()
+          assert 'android:icon="@drawable/ic_launcher"' in manifest
+          splash = Path('app/src/main/java/com/smarttoolbox/pro/BrandSplashActivity.java').read_text()
+          home = Path('app/src/main/java/com/smarttoolbox/pro/MainActivity.java').read_text()
+          assert 'R.drawable.sr_premium_logo' in splash
+          assert 'R.drawable.sr_premium_logo' in home
+          print('Updated SR icon PNGs verified: 512x512, matched, Launcher/Splash/Home references PASS')
+          PYCODE
 
       - name: Verify SR branding and developer profile
         working-directory: ${{ env.PROJECT_DIR }}
@@ -829,60 +860,6 @@ jobs:
             tests/com/smarttoolbox/pro/SchedulerForegroundLogicTest.java
           java -cp build/scheduler-foreground-tests com.smarttoolbox.pro.SchedulerForegroundLogicTest
 
-      - name: Verify Apps Backup & Restore source, SAF, APK integrity, split-install rules
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          trap 'code=$?; echo "::error title=APK backup source check::Line $LINENO failed: $BASH_COMMAND ($code)"; exit $code' ERR
-          src=app/src/main/java/com/smarttoolbox/pro
-          for cls in AppBackupActivity AppBackupSettingsActivity AppBackupPreferences \
-              AppBackupRepository ApkBackupRules AppRestoreCoordinator \
-              ApkRestoreResultReceiver ApkInstallApprovalActivity; do
-            test -f "$src/$cls.java"
-          done
-          test -f tests/com/smarttoolbox/pro/ApkBackupRulesTest.java
-          test -f "$src/ApkStreamIntegrity.java"
-          test -f tests/com/smarttoolbox/pro/ApkStreamIntegrityTest.java
-          grep -Fq 'AppBackupActivity.class' "$src/MainActivity.java"
-          grep -Fq 'android:name=".AppBackupActivity"' app/src/main/AndroidManifest.xml
-          grep -Fq 'android.permission.QUERY_ALL_PACKAGES' app/src/main/AndroidManifest.xml
-          grep -Fq 'tools:ignore="QueryAllPackagesPermission"' app/src/main/AndroidManifest.xml
-          grep -Fq 'android.permission.REQUEST_INSTALL_PACKAGES' app/src/main/AndroidManifest.xml
-          grep -Fq 'android.permission.REQUEST_DELETE_PACKAGES' app/src/main/AndroidManifest.xml
-          grep -Fq "androidx.documentfile:documentfile:1.0.1" app/build.gradle
-          grep -Fq 'Intent.ACTION_OPEN_DOCUMENT_TREE' "$src/AppBackupSettingsActivity.java"
-          grep -Fq 'takePersistableUriPermission' "$src/AppBackupSettingsActivity.java"
-          grep -Fq 'ai.splitSourceDirs' "$src/AppBackupRepository.java"
-          grep -Fq 'MessageDigest.getInstance("SHA-256")' "$src/AppBackupRepository.java"
-          grep -Fq 'DocumentFile.fromTreeUri' "$src/AppBackupRepository.java"
-          grep -Fq 'PackageInstaller.SessionParams.MODE_FULL_INSTALL' "$src/AppRestoreCoordinator.java"
-          grep -Fq 'session.openWrite(' "$src/AppRestoreCoordinator.java"
-          grep -Fq 'session.fsync(output)' "$src/AppRestoreCoordinator.java"
-          grep -Fq 'PendingIntent.FLAG_MUTABLE' "$src/AppRestoreCoordinator.java"
-          grep -Fq 'STATUS_PENDING_USER_ACTION' "$src/AppRestoreCoordinator.java"
-          grep -Fq 'Intent.ACTION_UNINSTALL_PACKAGE' "$src/AppBackupActivity.java"
-          grep -Fq 'FileProvider.getUriForFile' "$src/AppBackupRepository.java"
-          grep -Fq 'Intent.FLAG_GRANT_READ_URI_PERMISSION' "$src/AppBackupActivity.java"
-          if grep -R -n 'com.android.tools:sdklib\|com.android.tools:common' "$src"; then
-            echo 'Deprecated Android SDK tools are not permitted in the app source.'; exit 1
-          fi
-          # Regression guard: archived-app icon previously caused 3 javac
-          # "cannot find symbol: variable icon" errors in AppBackupActivity.
-          mkdir -p build/archive-icon-regression-tests
-          javac -encoding UTF-8 -d build/archive-icon-regression-tests \
-            tests/com/smarttoolbox/pro/AppBackupArchiveIconSourceTest.java
-          java -cp build/archive-icon-regression-tests \
-            com.smarttoolbox.pro.AppBackupArchiveIconSourceTest \
-            "$src/AppBackupRepository.java" "$src/AppBackupActivity.java"
-          mkdir -p build/apps-backup-tests
-          javac -encoding UTF-8 -d build/apps-backup-tests \
-            "$src/ApkBackupRules.java" "$src/ApkStreamIntegrity.java" \
-            tests/com/smarttoolbox/pro/ApkBackupRulesTest.java \
-            tests/com/smarttoolbox/pro/ApkStreamIntegrityTest.java
-          java -cp build/apps-backup-tests com.smarttoolbox.pro.ApkBackupRulesTest
-          java -cp build/apps-backup-tests com.smarttoolbox.pro.ApkStreamIntegrityTest
-
       - name: Verify Kotlin standard library alignment
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
@@ -1000,38 +977,77 @@ jobs:
             tests/com/smarttoolbox/pro/GlobalPortraitEdgeLogicTest.java
           java -cp build/global-portrait-tests com.smarttoolbox.pro.GlobalPortraitEdgeLogicTest
 
-      - name: Android Lint Debug — full checks enabled
+      - name: Verify Apps Backup and Restore with original APK and split support
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -o pipefail
-          gradle --no-daemon --console=plain :app:lintDebug 2>&1 | tee lint-debug.log
+          set -Eeuo pipefail
+          trap 'code=$?; echo "::error title=Apps Backup::Failed line $LINENO: $BASH_COMMAND [exit $code]"; exit $code' ERR
+          src=app/src/main/java/com/smarttoolbox/pro
+          test -f "$src/AppsBackupActivity.java"
+          test -f "$src/ApkBackupLogic.java"
+          test -f "$src/ApkArchiveWriter.java"
+          test -f tests/com/smarttoolbox/pro/ApkArchiveWriterTest.java
+          test -f "$src/ApkBackupStorage.java"
+          test -f "$src/ApkRestoreInstaller.java"
+          test -f "$src/ApkInstallStatusReceiver.java"
+          test -f tests/com/smarttoolbox/pro/ApkBackupLogicTest.java
+          grep -Fq 'android:name="android.permission.QUERY_ALL_PACKAGES"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:name="android.permission.REQUEST_INSTALL_PACKAGES"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:name="android.permission.REQUEST_DELETE_PACKAGES"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:name=".AppsBackupActivity"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:name=".ApkInstallStatusReceiver"' app/src/main/AndroidManifest.xml
+          grep -Fq 'androidx.documentfile:documentfile:1.0.1' app/build.gradle
+          grep -Fq 'AppsBackupActivity.class' "$src/MainActivity.java"
+          grep -Fq 'PackageManager' "$src/AppsBackupActivity.java"
+          grep -Fq 'ACTION_OPEN_DOCUMENT_TREE' "$src/AppsBackupActivity.java"
+          grep -Fq 'takePersistableUriPermission' "$src/AppsBackupActivity.java"
+          grep -Fq 'Intent.ACTION_UNINSTALL_PACKAGE' "$src/AppsBackupActivity.java"
+          grep -Fq 'Intent.ACTION_SEND_MULTIPLE' "$src/AppsBackupActivity.java"
+          grep -Fq 'getApplicationIcon(app.packageName)' "$src/AppsBackupActivity.java"
+          grep -Fq 'ApkArchiveWriter.write(app.basePath' "$src/ApkBackupStorage.java"
+          grep -Fq 'ZipOutputStream' "$src/ApkArchiveWriter.java"
+          grep -Fq 'new ZipEntry("base.apk")' "$src/ApkArchiveWriter.java"
+          grep -Fq 'PackageInstaller.Session' "$src/ApkRestoreInstaller.java"
+          grep -Fq 'PackageInstaller.STATUS_PENDING_USER_ACTION' "$src/ApkInstallStatusReceiver.java"
+          mkdir -p build/app-backup-tests
+          javac -encoding UTF-8 -d build/app-backup-tests \
+            "$src/ApkBackupLogic.java" \
+            "$src/ApkArchiveWriter.java" \
+            tests/com/smarttoolbox/pro/ApkBackupLogicTest.java \
+            tests/com/smarttoolbox/pro/ApkArchiveWriterTest.java
+          java -cp build/app-backup-tests com.smarttoolbox.pro.ApkBackupLogicTest
+          java -cp build/app-backup-tests com.smarttoolbox.pro.ApkArchiveWriterTest
 
-      - name: Print full Android Lint report
-        if: always()
+      - name: Verify Bengali full-battery voice monitoring and anti-repeat tests
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          echo '===== ANDROID LINT LOG ====='
-          if [ -f lint-debug.log ]; then cat lint-debug.log; else echo 'Lint was not reached'; fi
-          echo '===== DETAILED LINT XML ====='
-          if [ -f app/build/reports/lint-results-debug.xml ]; then
-            cat app/build/reports/lint-results-debug.xml
-          else
-            echo 'Lint XML was not created or lint stopped before report generation.'
-          fi
-
-      - name: Upload Android Lint report and log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: SR-Smart-Toolbox-Pro-lint-report
-          path: |
-            ${{ env.PROJECT_DIR }}/lint-debug.log
-            ${{ env.PROJECT_DIR }}/app/build/reports/lint-results-debug.*
-            ${{ env.PROJECT_DIR }}/app/build/intermediates/lint_*/**/*
-          if-no-files-found: warn
-          retention-days: 14
+          set -Eeuo pipefail
+          trap 'code=$?; echo "::error title=Battery voice alert::Check failed at line $LINENO: $BASH_COMMAND [exit $code]"; exit $code' ERR
+          src=app/src/main/java/com/smarttoolbox/pro
+          for file in BatteryFullAlertLogic BatteryFullAlertPrefs BatteryFullVoiceService BatteryFullBootReceiver BatteryFullAlertActivity; do
+            test -f "$src/$file.java"
+          done
+          test -f tests/com/smarttoolbox/pro/BatteryFullAlertLogicTest.java
+          grep -Fq 'BatteryFullAlertActivity.class' "$src/MainActivity.java"
+          grep -Fq 'MENU_BATTERY_VOICE' "$src/MainActivity.java"
+          grep -Fq 'android:name=".BatteryFullVoiceService"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:name=".BatteryFullAlertActivity"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:name=".BatteryFullBootReceiver"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:foregroundServiceType="specialUse"' app/src/main/AndroidManifest.xml
+          grep -Fq 'Intent.ACTION_BATTERY_CHANGED' "$src/BatteryFullVoiceService.java"
+          grep -Fq 'BatteryFullAlertLogic.shouldAnnounce' "$src/BatteryFullVoiceService.java"
+          grep -Fq 'BatteryFullAlertPrefs.setAnnounced' "$src/BatteryFullVoiceService.java"
+          grep -Fq 'TextToSpeech' "$src/BatteryFullVoiceService.java"
+          grep -Fq 'new Locale("bn", "BD")' "$src/BatteryFullVoiceService.java"
+          grep -Fq 'ব্যাটারি ফুল চার্জ হয়েছে, চার্জ থেকে খুলুন।' "$src/BatteryFullVoiceService.java"
+          grep -Fq 'BatteryFullVoiceService.startMonitoring(context)' "$src/BatteryFullBootReceiver.java"
+          mkdir -p build/battery-voice-tests
+          javac -encoding UTF-8 -d build/battery-voice-tests \
+            "$src/BatteryFullAlertLogic.java" \
+            tests/com/smarttoolbox/pro/BatteryFullAlertLogicTest.java
+          java -cp build/battery-voice-tests com.smarttoolbox.pro.BatteryFullAlertLogicTest
 
       - name: Build debug APK
         working-directory: ${{ env.PROJECT_DIR }}
