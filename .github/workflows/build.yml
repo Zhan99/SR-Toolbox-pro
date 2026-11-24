@@ -934,6 +934,46 @@ jobs:
           print(len(permissions),'manifest permissions mapped to described features')
           PY_VALIDATE
 
+      - name: Verify swipe haptics and Bengali English full-charge speech
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'code=$?; echo "::error title=Voice and vibration::Line $LINENO: $BASH_COMMAND [$code]"; exit "$code"' ERR
+          src=app/src/main/java/com/smarttoolbox/pro
+          test -f "$src/SwipeHaptics.java"
+          test -f "$src/SwipeVibrationLogic.java"
+          test -f "$src/FullChargeLanguageLogic.java"
+          test -f tests/com/smarttoolbox/pro/SwipeVibrationLogicTest.java
+          test -f tests/com/smarttoolbox/pro/FullChargeLanguageLogicTest.java
+          grep -Fq 'android.permission.VIBRATE' app/src/main/AndroidManifest.xml
+          grep -Fq 'SwipeHaptics.onSwipeMenuOpen(this)' "$src/FloatingControlService.java"
+          grep -Fq 'swipeVibrationSwitch' "$src/FloatingIconSettingsActivity.java"
+          grep -Fq 'FullChargeAlertPreferences.setLanguage' "$src/FullChargeAlertActivity.java"
+          grep -Fq 'FullChargeLanguageLogic.fullTitle(language())' "$src/FullChargeVoiceService.java"
+          grep -Fq 'TextToSpeech' "$src/FullChargeVoicePlayer.java"
+          grep -Fq 'R.raw.battery_full_english' "$src/FullChargeVoicePlayer.java"
+          grep -Fq 'R.raw.battery_full_bengali' "$src/FullChargeVoicePlayer.java"
+          mkdir -p build/swipe-voice-tests
+          javac -encoding UTF-8 -d build/swipe-voice-tests \
+            "$src/SwipeVibrationLogic.java" \
+            "$src/FullChargeLanguageLogic.java" \
+            tests/com/smarttoolbox/pro/SwipeVibrationLogicTest.java \
+            tests/com/smarttoolbox/pro/FullChargeLanguageLogicTest.java
+          java -cp build/swipe-voice-tests com.smarttoolbox.pro.SwipeVibrationLogicTest
+          java -cp build/swipe-voice-tests com.smarttoolbox.pro.FullChargeLanguageLogicTest
+          python3 - <<'PY_VOICE'
+          from pathlib import Path
+          import wave
+          for lang in ('bengali', 'english'):
+              filename = Path('app/src/main/res/raw')/f'battery_full_{lang}.wav'
+              with wave.open(str(filename), 'rb') as f:
+                  assert f.getnchannels() == 1
+                  assert 2 < f.getnframes() / f.getframerate() < 12
+                  assert f.getsampwidth() == 2
+                  print(f'OK {lang}: {f.getnframes()/f.getframerate():.1f} seconds')
+          PY_VOICE
+
       - name: Verify Full Charge Bengali Voice Alert, notification and charging lifecycle
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -954,7 +994,7 @@ jobs:
           grep -Fq 'Intent.ACTION_BATTERY_CHANGED' "$src/FullChargeVoiceService.java"
           grep -Fq 'Intent.ACTION_POWER_DISCONNECTED' "$src/FullChargeVoiceService.java"
           grep -Fq 'FullChargeAlertPreferences.setAnnounced(this, true)' "$src/FullChargeVoiceService.java"
-          grep -Fq 'FullChargeVoicePlayer.play(this)' "$src/FullChargeVoiceService.java"
+          grep -Fq 'FullChargeVoicePlayer.speak(this' "$src/FullChargeVoiceService.java"
           grep -Fq 'FullChargeAlertPreferences.enabled(context)' "$src/MessageScheduleBootReceiver.java"
           grep -Fq 'sr_full_charge_monitor' "$src/NotificationControlsActivity.java"
           test -s app/src/main/res/raw/battery_full_bengali.wav
