@@ -895,6 +895,45 @@ jobs:
           java -cp build/apps-backup-tests com.smarttoolbox.pro.AppsBackupPayloadTest
           java -cp build/apps-backup-tests com.smarttoolbox.pro.AppsBackupArchiveLogicTest
 
+      - name: Verify automatic App Backup folders, readable permissions and tools-first home
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'code=$?; echo "::error title=Backup and permission center::Failed at line $LINENO: $BASH_COMMAND [exit $code]"; exit "$code"' ERR
+          src=app/src/main/java/com/smarttoolbox/pro
+          test -s "$src/AppPermissionsActivity.java"
+          test -s "$src/AppsBackupFolderLogic.java"
+          test -s tests/com/smarttoolbox/pro/AppsBackupFolderLogicTest.java
+          grep -Fq 'MediaStore.Downloads.EXTERNAL_CONTENT_URI' "$src/AppsBackupStore.java"
+          grep -Fq 'Download/App Backup' "$src/AppsBackupActivity.java"
+          grep -Fq 'backupPublic(e,keep)' "$src/AppsBackupActivity.java"
+          grep -Fq 'APP_BACKUP_FOLDER' "$src/AppsBackupStore.java"
+          grep -Fq 'PUBLIC_SPLIT_PATH' "$src/AppsBackupStore.java"
+          grep -Fq 'new Intent(this, AppPermissionsActivity.class)' "$src/MainActivity.java"
+          grep -Fq 'android:name=".AppPermissionsActivity"' app/src/main/AndroidManifest.xml
+          if grep -Fq 'Ui.addCard(this, body, hero' "$src/MainActivity.java"; then
+            echo 'The creator/about hero must be removed from the Home screen.'; exit 1
+          fi
+          mkdir -p build/backup-folder-tests
+          javac --release 17 -encoding UTF-8 -d build/backup-folder-tests \
+            "$src/AppsBackupFolderLogic.java" \
+            "$src/AppsBackupArchiveLogic.java" \
+            tests/com/smarttoolbox/pro/AppsBackupFolderLogicTest.java
+          java -cp build/backup-folder-tests com.smarttoolbox.pro.AppsBackupFolderLogicTest
+          python3 - <<'PY_VALIDATE'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          manifest=ET.parse('app/src/main/AndroidManifest.xml').getroot()
+          prefix='{http://schemas.android.com/apk/res/android}'
+          permissions={p.attrib[prefix+'name'].split('.')[-1] for p in manifest.findall('uses-permission')}
+          overview=Path('app/src/main/java/com/smarttoolbox/pro/AppPermissionsActivity.java').read_text()
+          missing=sorted(p for p in permissions if p not in overview)
+          assert not missing, 'Unlabelled Manifest permissions: '+', '.join(missing)
+          assert 'কোন ফিচারের জন্য:' in overview
+          print(len(permissions),'manifest permissions mapped to described features')
+          PY_VALIDATE
+
       - name: Verify Full Charge Bengali Voice Alert, notification and charging lifecycle
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
