@@ -867,6 +867,14 @@ jobs:
           if grep -R -n 'com.android.tools:sdklib\|com.android.tools:common' "$src"; then
             echo 'Deprecated Android SDK tools are not permitted in the app source.'; exit 1
           fi
+          # Regression guard: archived-app icon previously caused 3 javac
+          # "cannot find symbol: variable icon" errors in AppBackupActivity.
+          mkdir -p build/archive-icon-regression-tests
+          javac -encoding UTF-8 -d build/archive-icon-regression-tests \
+            tests/com/smarttoolbox/pro/AppBackupArchiveIconSourceTest.java
+          java -cp build/archive-icon-regression-tests \
+            com.smarttoolbox.pro.AppBackupArchiveIconSourceTest \
+            "$src/AppBackupRepository.java" "$src/AppBackupActivity.java"
           mkdir -p build/apps-backup-tests
           javac -encoding UTF-8 -d build/apps-backup-tests \
             "$src/ApkBackupRules.java" "$src/ApkStreamIntegrity.java" \
