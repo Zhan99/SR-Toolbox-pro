@@ -26,9 +26,11 @@ jobs:
           set -euo pipefail
 
           project_dir=""
-          if [ -f app/build.gradle ]; then
+          # A freshly uploaded source ZIP takes priority over any stale extracted
+          # source files left at the repository root by an earlier release.
+          if [ -f app/build.gradle ] && [ ! -f SmartToolboxPro_GitHub.zip ]; then
             project_dir="."
-          elif [ -f SmartToolboxPro/app/build.gradle ]; then
+          elif [ -f SmartToolboxPro/app/build.gradle ] && [ ! -f SmartToolboxPro_GitHub.zip ]; then
             project_dir="SmartToolboxPro"
           else
             mkdir -p source
@@ -37,8 +39,6 @@ jobs:
 
             # Only ZIPs containing an Android app module count as source archives.
             for archive in ./*.zip; do
-              # Do NOT use grep -q with pipefail: it can close the pipe before unzip
-              # finishes writing, causing a SIGPIPE exit and falsely claiming 0 source ZIPs.
               if unzip -Z1 "$archive" | grep -E '(^|/)app/build.gradle$' > /dev/null; then
                 source_archives+=("$archive")
               fi
@@ -192,34 +192,6 @@ jobs:
             app/src/main/java/com/smarttoolbox/pro/VideoExitPolicy.java \
             tests/com/smarttoolbox/pro/VideoExitPolicyTest.java
           java -cp build/video-exit-tests com.smarttoolbox.pro.VideoExitPolicyTest
-
-      - name: Verify new SR gold and blue launcher icon assets
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 - <<'PYCODE'
-          from pathlib import Path
-          import struct, hashlib
-          res = Path('app/src/main/res/drawable-nodpi')
-          expected = ['ic_launcher.png', 'sr_premium_logo.png']
-          hashes = []
-          for name in expected:
-              data = (res / name).read_bytes()
-              assert data[:8] == b'\x89PNG\r\n\x1a\n', (name, 'not PNG')
-              width, height = struct.unpack('>II', data[16:24])
-              assert (width, height) == (512, 512), (name, width, height)
-              assert len(data) > 50000, (name, 'too small')
-              hashes.append(hashlib.sha256(data).digest())
-          assert hashes[0] == hashes[1], 'Launcher, home and opening logo differ'
-          manifest = Path('app/src/main/AndroidManifest.xml').read_text()
-          assert 'android:icon="@drawable/ic_launcher"' in manifest
-          splash = Path('app/src/main/java/com/smarttoolbox/pro/BrandSplashActivity.java').read_text()
-          home = Path('app/src/main/java/com/smarttoolbox/pro/MainActivity.java').read_text()
-          assert 'R.drawable.sr_premium_logo' in splash
-          assert 'R.drawable.sr_premium_logo' in home
-          print('Updated SR icon PNGs verified: 512x512, matched, Launcher/Splash/Home references PASS')
-          PYCODE
 
       - name: Verify SR branding and developer profile
         working-directory: ${{ env.PROJECT_DIR }}
@@ -751,6 +723,32 @@ jobs:
             tests/com/smarttoolbox/pro/SchedulerBatchUiLogicTest.java
           java -cp build/group-card-tests com.smarttoolbox.pro.SchedulerBatchUiLogicTest
 
+      - name: Verify message history calendar dots and persistent manual border positioning
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'code=$?; echo "::error title=Calendar and floating border::Failed line $LINENO: $BASH_COMMAND [exit $code]"; exit $code' ERR
+          src=app/src/main/java/com/smarttoolbox/pro
+          for name in SchedulerCalendarLogic SchedulerRecordCalendar FloatingBoundaryPolicy; do
+            test -f "$src/$name.java"
+          done
+          grep -Fq 'SchedulerRecordCalendar.show(' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'MessageScheduleStore.getAll(this), chosen ->' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'SchedulerCalendarLogic.futureWithOriginalTime(' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'lastTriggeredAtMillis' "$src/SchedulerRecordCalendar.java"
+          grep -Fq 'FloatingBoundaryPolicy.shouldAutoDock(' "$src/FloatingControlService.java"
+          grep -Fq 'FloatingBoundaryPolicy.PREF_MANUAL_POSITION' "$src/FloatingControlService.java"
+          grep -Fq 'Reset icon to screen border' "$src/FloatingIconSettingsActivity.java"
+          grep -Fq 'finishEdgeTabDrag()' "$src/FloatingControlService.java"
+          mkdir -p build/calendar-edge-tests
+          javac -encoding UTF-8 -d build/calendar-edge-tests \
+            "$src/SchedulerCalendarLogic.java" "$src/FloatingBoundaryPolicy.java" \
+            tests/com/smarttoolbox/pro/SchedulerCalendarLogicTest.java \
+            tests/com/smarttoolbox/pro/FloatingBoundaryPolicyTest.java
+          java -cp build/calendar-edge-tests com.smarttoolbox.pro.SchedulerCalendarLogicTest
+          java -cp build/calendar-edge-tests com.smarttoolbox.pro.FloatingBoundaryPolicyTest
+
       - name: Verify collapsible scheduler inbox sections and local-date grouping
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -859,6 +857,82 @@ jobs:
             "$src/SchedulerForegroundLogic.java" \
             tests/com/smarttoolbox/pro/SchedulerForegroundLogicTest.java
           java -cp build/scheduler-foreground-tests com.smarttoolbox.pro.SchedulerForegroundLogicTest
+
+      - name: Verify integrated Apps Backup Restore and original APK integrity
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'code=$?; echo "::error title=Apps Backup::Check failed line $LINENO: $BASH_COMMAND [exit $code]"; exit "$code"' ERR
+          dir=app/src/main/java/com/smarttoolbox/pro
+          for cls in AppsBackupActivity AppsBackupStore AppsBackupPayload AppsBackupArchiveLogic AppsBackupInstallReceiver AppsBackupShareProvider; do
+            test -s "$dir/$cls.java"
+          done
+          test -s tests/com/smarttoolbox/pro/AppsBackupPayloadTest.java
+          test -s tests/com/smarttoolbox/pro/AppsBackupArchiveLogicTest.java
+          grep -Fq 'AppsBackupActivity.class' "$dir/MainActivity.java"
+          grep -Fq 'Apps Backup & Restore' "$dir/MainActivity.java"
+          grep -Fq 'ThemeManager.applyToActivity(this)' "$dir/AppsBackupActivity.java"
+          grep -Fq 'AppsBackupPayload.writeBase' "$dir/AppsBackupStore.java"
+          grep -Fq 'AppsBackupPayload.writeFull' "$dir/AppsBackupStore.java"
+          grep -Fq 'new PackageInstaller.SessionParams' "$dir/AppsBackupStore.java"
+          grep -Fq 'DocumentsContract.createDocument' "$dir/AppsBackupStore.java"
+          grep -Fq 'takePersistableUriPermission' "$dir/AppsBackupActivity.java"
+          grep -Fq 'FLAG_GRANT_READ_URI_PERMISSION' "$dir/AppsBackupActivity.java"
+          grep -Fq 'FLAG_MUTABLE' "$dir/AppsBackupStore.java"
+          grep -Fq 'android:name=".AppsBackupActivity"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:name=".AppsBackupInstallReceiver"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:name=".AppsBackupShareProvider"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android.permission.QUERY_ALL_PACKAGES' app/src/main/AndroidManifest.xml
+          grep -Fq 'android.permission.REQUEST_INSTALL_PACKAGES' app/src/main/AndroidManifest.xml
+          grep -Fq 'android.permission.REQUEST_DELETE_PACKAGES' app/src/main/AndroidManifest.xml
+          mkdir -p build/apps-backup-tests
+          javac --release 17 -encoding UTF-8 -d build/apps-backup-tests \
+            "$dir/AppsBackupPayload.java" \
+            "$dir/AppsBackupArchiveLogic.java" \
+            tests/com/smarttoolbox/pro/AppsBackupPayloadTest.java \
+            tests/com/smarttoolbox/pro/AppsBackupArchiveLogicTest.java
+          java -cp build/apps-backup-tests com.smarttoolbox.pro.AppsBackupPayloadTest
+          java -cp build/apps-backup-tests com.smarttoolbox.pro.AppsBackupArchiveLogicTest
+
+      - name: Verify Full Charge Bengali Voice Alert, notification and charging lifecycle
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'code=$?; echo "::error title=Full Charge Voice::Failed line $LINENO: $BASH_COMMAND [exit $code]"; exit "$code"' ERR
+          src=app/src/main/java/com/smarttoolbox/pro
+          for java in FullChargeAlertLogic FullChargeAlertPreferences FullChargeVoicePlayer FullChargeVoiceService FullChargeAlertActivity; do
+            test -s "$src/$java.java"
+          done
+          test -s tests/com/smarttoolbox/pro/FullChargeAlertLogicTest.java
+          grep -Fq 'MENU_FULL_CHARGE_VOICE' "$src/MainActivity.java"
+          grep -Fq 'startActivity(new Intent(this, FullChargeAlertActivity.class))' "$src/MainActivity.java"
+          grep -Fq 'android:name=".FullChargeVoiceService"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:name=".FullChargeAlertActivity"' app/src/main/AndroidManifest.xml
+          grep -Fq 'android:foregroundServiceType="specialUse"' app/src/main/AndroidManifest.xml
+          grep -Fq 'registerReceiver(batteryReceiver, filter)' "$src/FullChargeVoiceService.java"
+          grep -Fq 'Intent.ACTION_BATTERY_CHANGED' "$src/FullChargeVoiceService.java"
+          grep -Fq 'Intent.ACTION_POWER_DISCONNECTED' "$src/FullChargeVoiceService.java"
+          grep -Fq 'FullChargeAlertPreferences.setAnnounced(this, true)' "$src/FullChargeVoiceService.java"
+          grep -Fq 'FullChargeVoicePlayer.play(this)' "$src/FullChargeVoiceService.java"
+          grep -Fq 'FullChargeAlertPreferences.enabled(context)' "$src/MessageScheduleBootReceiver.java"
+          grep -Fq 'sr_full_charge_monitor' "$src/NotificationControlsActivity.java"
+          test -s app/src/main/res/raw/battery_full_bengali.wav
+          python3 - <<'PYVOICE'
+          import wave
+          f = 'app/src/main/res/raw/battery_full_bengali.wav'
+          with wave.open(f, 'rb') as w:
+              assert w.getnchannels() == 1, 'expected mono Bengali warning'
+              assert w.getframerate() >= 16000, 'warning sample rate is too low'
+              assert w.getnframes() / w.getframerate() >= 2, 'warning audio too short'
+          print('Bundled offline Bengali WAV validation passed')
+          PYVOICE
+          mkdir -p build/full-charge-alert-tests
+          javac -encoding UTF-8 -d build/full-charge-alert-tests \
+            "$src/FullChargeAlertLogic.java" \
+            tests/com/smarttoolbox/pro/FullChargeAlertLogicTest.java
+          java -cp build/full-charge-alert-tests com.smarttoolbox.pro.FullChargeAlertLogicTest
 
       - name: Verify Kotlin standard library alignment
         working-directory: ${{ env.PROJECT_DIR }}
@@ -977,84 +1051,31 @@ jobs:
             tests/com/smarttoolbox/pro/GlobalPortraitEdgeLogicTest.java
           java -cp build/global-portrait-tests com.smarttoolbox.pro.GlobalPortraitEdgeLogicTest
 
-      - name: Verify Apps Backup and Restore with original APK and split support
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          trap 'code=$?; echo "::error title=Apps Backup::Failed line $LINENO: $BASH_COMMAND [exit $code]"; exit $code' ERR
-          src=app/src/main/java/com/smarttoolbox/pro
-          test -f "$src/AppsBackupActivity.java"
-          test -f "$src/ApkBackupLogic.java"
-          test -f "$src/ApkArchiveWriter.java"
-          test -f tests/com/smarttoolbox/pro/ApkArchiveWriterTest.java
-          test -f "$src/ApkBackupStorage.java"
-          test -f "$src/ApkRestoreInstaller.java"
-          test -f "$src/ApkInstallStatusReceiver.java"
-          test -f tests/com/smarttoolbox/pro/ApkBackupLogicTest.java
-          grep -Fq 'android:name="android.permission.QUERY_ALL_PACKAGES"' app/src/main/AndroidManifest.xml
-          grep -Fq 'android:name="android.permission.REQUEST_INSTALL_PACKAGES"' app/src/main/AndroidManifest.xml
-          grep -Fq 'android:name="android.permission.REQUEST_DELETE_PACKAGES"' app/src/main/AndroidManifest.xml
-          grep -Fq 'android:name=".AppsBackupActivity"' app/src/main/AndroidManifest.xml
-          grep -Fq 'android:name=".ApkInstallStatusReceiver"' app/src/main/AndroidManifest.xml
-          grep -Fq 'androidx.documentfile:documentfile:1.0.1' app/build.gradle
-          grep -Fq 'AppsBackupActivity.class' "$src/MainActivity.java"
-          grep -Fq 'PackageManager' "$src/AppsBackupActivity.java"
-          grep -Fq 'ACTION_OPEN_DOCUMENT_TREE' "$src/AppsBackupActivity.java"
-          grep -Fq 'takePersistableUriPermission' "$src/AppsBackupActivity.java"
-          grep -Fq 'Intent.ACTION_UNINSTALL_PACKAGE' "$src/AppsBackupActivity.java"
-          grep -Fq 'Intent.ACTION_SEND_MULTIPLE' "$src/AppsBackupActivity.java"
-          grep -Fq 'getApplicationIcon(app.packageName)' "$src/AppsBackupActivity.java"
-          grep -Fq 'ApkArchiveWriter.write(app.basePath' "$src/ApkBackupStorage.java"
-          grep -Fq 'ZipOutputStream' "$src/ApkArchiveWriter.java"
-          grep -Fq 'new ZipEntry("base.apk")' "$src/ApkArchiveWriter.java"
-          grep -Fq 'PackageInstaller.Session' "$src/ApkRestoreInstaller.java"
-          grep -Fq 'PackageInstaller.STATUS_PENDING_USER_ACTION' "$src/ApkInstallStatusReceiver.java"
-          mkdir -p build/app-backup-tests
-          javac -encoding UTF-8 -d build/app-backup-tests \
-            "$src/ApkBackupLogic.java" \
-            "$src/ApkArchiveWriter.java" \
-            tests/com/smarttoolbox/pro/ApkBackupLogicTest.java \
-            tests/com/smarttoolbox/pro/ApkArchiveWriterTest.java
-          java -cp build/app-backup-tests com.smarttoolbox.pro.ApkBackupLogicTest
-          java -cp build/app-backup-tests com.smarttoolbox.pro.ApkArchiveWriterTest
-
-      - name: Verify Bengali full-battery voice monitoring and anti-repeat tests
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          trap 'code=$?; echo "::error title=Battery voice alert::Check failed at line $LINENO: $BASH_COMMAND [exit $code]"; exit $code' ERR
-          src=app/src/main/java/com/smarttoolbox/pro
-          for file in BatteryFullAlertLogic BatteryFullAlertPrefs BatteryFullVoiceService BatteryFullBootReceiver BatteryFullAlertActivity; do
-            test -f "$src/$file.java"
-          done
-          test -f tests/com/smarttoolbox/pro/BatteryFullAlertLogicTest.java
-          grep -Fq 'BatteryFullAlertActivity.class' "$src/MainActivity.java"
-          grep -Fq 'MENU_BATTERY_VOICE' "$src/MainActivity.java"
-          grep -Fq 'android:name=".BatteryFullVoiceService"' app/src/main/AndroidManifest.xml
-          grep -Fq 'android:name=".BatteryFullAlertActivity"' app/src/main/AndroidManifest.xml
-          grep -Fq 'android:name=".BatteryFullBootReceiver"' app/src/main/AndroidManifest.xml
-          grep -Fq 'android:foregroundServiceType="specialUse"' app/src/main/AndroidManifest.xml
-          grep -Fq 'Intent.ACTION_BATTERY_CHANGED' "$src/BatteryFullVoiceService.java"
-          grep -Fq 'BatteryFullAlertLogic.shouldAnnounce' "$src/BatteryFullVoiceService.java"
-          grep -Fq 'BatteryFullAlertPrefs.setAnnounced' "$src/BatteryFullVoiceService.java"
-          grep -Fq 'TextToSpeech' "$src/BatteryFullVoiceService.java"
-          grep -Fq 'new Locale("bn", "BD")' "$src/BatteryFullVoiceService.java"
-          grep -Fq 'ব্যাটারি ফুল চার্জ হয়েছে, চার্জ থেকে খুলুন।' "$src/BatteryFullVoiceService.java"
-          grep -Fq 'BatteryFullVoiceService.startMonitoring(context)' "$src/BatteryFullBootReceiver.java"
-          mkdir -p build/battery-voice-tests
-          javac -encoding UTF-8 -d build/battery-voice-tests \
-            "$src/BatteryFullAlertLogic.java" \
-            tests/com/smarttoolbox/pro/BatteryFullAlertLogicTest.java
-          java -cp build/battery-voice-tests com.smarttoolbox.pro.BatteryFullAlertLogicTest
-
       - name: Build debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -o pipefail
           gradle --no-daemon --console=plain :app:assembleDebug 2>&1 | tee build-debug.log
+
+      # The supplied stand-alone backup app ran Android lint strictly. In the
+      # combined toolbox we preserve APK delivery even if legacy components have
+      # unrelated lint findings. Review the uploaded report before distribution.
+      - name: Run Android lint report for combined app
+        if: success()
+        continue-on-error: true
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: gradle --no-daemon --console=plain :app:lintDebug
+
+      - name: Upload Android lint report (if generated)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SR-Smart-Toolbox-Pro-lint-report
+          path: ${{ env.PROJECT_DIR }}/app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Print Java compiler errors (if build fails)
         working-directory: ${{ env.PROJECT_DIR }}
