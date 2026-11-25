@@ -749,6 +749,70 @@ jobs:
           java -cp build/calendar-edge-tests com.smarttoolbox.pro.SchedulerCalendarLogicTest
           java -cp build/calendar-edge-tests com.smarttoolbox.pro.FloatingBoundaryPolicyTest
 
+      - name: Verify ringtone-volume battery voice, rotating edge bar, scheduler calendar toggle and QR gallery import
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'code=$?; echo "::error title=Feature integration::Source verification failed at $LINENO: $BASH_COMMAND [$code]"; exit $code' ERR
+          src=app/src/main/java/com/smarttoolbox/pro
+          # Both TTS and bundled Bengali/English fallback must follow ring-volume routing.
+          test "$(grep -Fc '.setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)' "$src/FullChargeVoicePlayer.java")" = 2
+          if grep -Fq 'USAGE_ALARM' "$src/FullChargeVoicePlayer.java"; then exit 1; fi
+          grep -Fq 'setVolumeControlStream(AudioManager.STREAM_RING)' "$src/FullChargeAlertActivity.java"
+          # Calendar always has a show/hide control and persists user choice.
+          grep -Fq 'PREF_CALENDAR_VISIBLE' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'calendarVisible ? "▴ Hide" : "▾ Show"' "$src/MessageSchedulerActivity.java"
+          grep -Fq '.putBoolean(PREF_CALENDAR_VISIBLE, !calendarVisible)' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'if (calendarVisible)' "$src/MessageSchedulerActivity.java"
+          # Edge tab remains border-flush, including during long-hold drag and rotation.
+          grep -Fq 'FloatingEdgeGeometry.x(' "$src/FloatingControlService.java"
+          grep -Fq 'FloatingEdgeGeometry.y(' "$src/FloatingControlService.java"
+          grep -Fq 'showEdgeHandle(left, centerY)' "$src/FloatingControlService.java"
+          test -s tests/com/smarttoolbox/pro/FloatingEdgeGeometryTest.java
+          # Gallery is scoped to the selected picture, with an on-device bundled decoder.
+          grep -Fq "com.google.mlkit:barcode-scanning:17.3.0" app/build.gradle
+          grep -Fq 'Intent.ACTION_OPEN_DOCUMENT' "$src/BarcodeScannerActivity.java"
+          grep -Fq 'pick.setType("image/*")' "$src/BarcodeScannerActivity.java"
+          grep -Fq 'InputImage.fromFilePath(this, imageUri)' "$src/BarcodeScannerActivity.java"
+          grep -Fq 'BarcodeScanning.getClient()' "$src/BarcodeScannerActivity.java"
+          grep -Fq 'scanner.close();' "$src/BarcodeScannerActivity.java"
+          mkdir -p build/ringtone-edge-gallery-tests
+          javac -encoding UTF-8 -d build/ringtone-edge-gallery-tests \
+            "$src/FloatingEdgeGeometry.java" \
+            "$src/GalleryBarcodeResultLogic.java" \
+            tests/com/smarttoolbox/pro/FloatingEdgeGeometryTest.java \
+            tests/com/smarttoolbox/pro/GalleryBarcodeResultLogicTest.java
+          java -cp build/ringtone-edge-gallery-tests com.smarttoolbox.pro.FloatingEdgeGeometryTest
+          java -cp build/ringtone-edge-gallery-tests com.smarttoolbox.pro.GalleryBarcodeResultLogicTest
+
+      - name: Verify today-only scheduler inbox calendar and floating idle settings
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src=app/src/main/java/com/smarttoolbox/pro
+          grep -Fq 'showRecordsForDay(schedulesContainer, groupedCards(all), today, zone)' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'SchedulerInboxCalendar.render(' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'hasMessages ? "\n●"' "$src/SchedulerInboxCalendar.java"
+          grep -Fq 'beginHoldHaptic(false)' "$src/FloatingControlService.java"
+          grep -Fq 'beginHoldHaptic(true)' "$src/FloatingControlService.java"
+          grep -Fq 'scheduleAutoHide();' "$src/FloatingControlService.java"
+          grep -Fq 'Auto-hide into vertical edge bar after selected idle time' "$src/FloatingIconSettingsActivity.java"
+          grep -Fq '2-second Hold vibration' "$src/FloatingIconSettingsActivity.java"
+          grep -Fq 'Vertical edge bar height:' "$src/FloatingIconSettingsActivity.java"
+          test -f "$src/HoldDragHaptics.java"
+          mkdir -p build/new-idle-inbox-tests
+          javac -encoding UTF-8 -d build/new-idle-inbox-tests \
+            "$src/FloatingOpenModeLogic.java" \
+            "$src/FloatingIdleLogic.java" \
+            "$src/SchedulerCalendarLogic.java" \
+            "$src/SchedulerInboxLogic.java" \
+            tests/com/smarttoolbox/pro/FloatingIdleLogicTest.java \
+            tests/com/smarttoolbox/pro/SchedulerInboxLogicTest.java
+          java -cp build/new-idle-inbox-tests com.smarttoolbox.pro.FloatingIdleLogicTest
+          java -cp build/new-idle-inbox-tests com.smarttoolbox.pro.SchedulerInboxLogicTest
+
       - name: Verify collapsible scheduler inbox sections and local-date grouping
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -759,8 +823,8 @@ jobs:
           test -f "$src/SchedulerSectionLogic.java"
           test -f tests/com/smarttoolbox/pro/SchedulerSectionLogicTest.java
           grep -Fq 'SchedulerSectionLogic.sectionFor(' "$src/MessageSchedulerActivity.java"
-          grep -Fq 'addScheduleSection(key, sectionItems)' "$src/MessageSchedulerActivity.java"
-          grep -Fq 'putBoolean("section_" + key, !expanded)' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'SchedulerInboxCalendar.render(' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'browseDate = date;' "$src/MessageSchedulerActivity.java"
           grep -Fq 'sectionSignature(latest, now, ZoneId.systemDefault())' "$src/MessageSchedulerActivity.java"
           grep -Fq 'SchedulerDisplayLogic.remainingLabel' "$src/MessageSchedulerActivity.java"
           mkdir -p build/scheduler-section-tests
@@ -1066,7 +1130,7 @@ jobs:
           grep -Fq 'gestureFallbackHandler.postDelayed' "$src/FloatingControlService.java"
           grep -Fq 'int touchWidthDp = Math.max(44, edgeWidthDp)' "$src/FloatingControlService.java"
           grep -Fq 'case MotionEvent.ACTION_UP:' "$src/FloatingControlService.java"
-          grep -Fq 'Portrait Edge — ALL apps' "$src/FloatingIconSettingsActivity.java"
+          grep -Fq 'All-app edge following — Portrait + Landscape' "$src/FloatingIconSettingsActivity.java"
           mkdir -p build/floating-swipe-tests
           javac -encoding UTF-8 -d build/floating-swipe-tests \
             "$src/FloatingBarGestureLogic.java" \
@@ -1116,7 +1180,7 @@ jobs:
           test -f "$src/GlobalPortraitEdgeLogic.java"
           test -f tests/com/smarttoolbox/pro/GlobalPortraitEdgeLogicTest.java
           grep -Fq 'floating.portrait_anywhere.edge' "$src/FloatingIconSettingsActivity.java"
-          grep -Fq 'Portrait Edge — ALL apps' "$src/FloatingIconSettingsActivity.java"
+          grep -Fq 'All-app edge following — Portrait + Landscape' "$src/FloatingIconSettingsActivity.java"
           grep -Fq 'registerDisplayListener(portraitDisplayListener' "$src/FloatingControlService.java"
           grep -Fq 'void onConfigurationChanged(Configuration newConfig)' "$src/FloatingControlService.java"
           grep -Fq 'syncGlobalPortraitEdge()' "$src/FloatingControlService.java"
