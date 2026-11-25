@@ -1077,6 +1077,40 @@ jobs:
             tests/com/smarttoolbox/pro/FullChargeAlertLogicTest.java
           java -cp build/full-charge-alert-tests com.smarttoolbox.pro.FullChargeAlertLogicTest
 
+      - name: Verify in-place scheduler edits, independent collapse arrows and persistent floating edge
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'code=$?; echo "::error title=Editing and edge position::Failed at $LINENO: $BASH_COMMAND [$code]"; exit $code' ERR
+          src=app/src/main/java/com/smarttoolbox/pro
+          # Today and calendar are independent persistent hide/show arrow controls.
+          grep -Fq 'PREF_TODAY_VISIBLE' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'todayVisible ? "▴ Hide" : "▾ Show"' "$src/MessageSchedulerActivity.java"
+          grep -Fq '.putBoolean(PREF_TODAY_VISIBLE, !todayVisible)' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'calendarVisible ? "▴ Hide" : "▾ Show"' "$src/MessageSchedulerActivity.java"
+          grep -Fq '.putBoolean(PREF_CALENDAR_VISIBLE, !calendarVisible)' "$src/MessageSchedulerActivity.java"
+          # No duplicate single message or group after Edit -> Save Changes.
+          grep -Fq 'editingId = item.id' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'MessageScheduleStore.get(this, editingId)' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'MessageScheduleStore.save(this, item)' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'Save Changes (same message)' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'editingBatchId = lead.batchId' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'MessageScheduleStore.updateBatch(this, batchId' "$src/MessageSchedulerActivity.java"
+          grep -Fq 'SchedulerEditPlanLogic.create(oldIds, phones)' "$src/MessageScheduleStore.java"
+          # Collapsed sidebar keeps the selected side and relative vertical position.
+          grep -Fq 'EDGE_CENTER_FRACTION' "$src/FloatingControlService.java"
+          grep -Fq 'FloatingEdgeGeometry.centerForFraction(' "$src/FloatingControlService.java"
+          grep -Fq '.putFloat(EDGE_CENTER_FRACTION' "$src/FloatingControlService.java"
+          test -f tests/com/smarttoolbox/pro/SchedulerEditPlanLogicTest.java
+          mkdir -p build/inplace-edit-edge-tests
+          javac -encoding UTF-8 -d build/inplace-edit-edge-tests \
+            "$src/SchedulerEditPlanLogic.java" "$src/FloatingEdgeGeometry.java" \
+            tests/com/smarttoolbox/pro/SchedulerEditPlanLogicTest.java \
+            tests/com/smarttoolbox/pro/FloatingEdgeGeometryTest.java
+          java -cp build/inplace-edit-edge-tests com.smarttoolbox.pro.SchedulerEditPlanLogicTest
+          java -cp build/inplace-edit-edge-tests com.smarttoolbox.pro.FloatingEdgeGeometryTest
+
       - name: Verify Kotlin standard library alignment
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
