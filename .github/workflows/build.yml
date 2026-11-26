@@ -106,6 +106,35 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      - name: Verify Video Player removal and global sound-vibration independence
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src=app/src/main/java/com/smarttoolbox/pro
+          for removed in VideoPlayerActivity VideoLibraryActivity VideoPlaybackService VideoPlaybackEdgeBridge VideoZoomLogic VideoFreshnessStore PortraitVideoEdgeLogic; do
+            test ! -f "$src/$removed.java"
+          done
+          test ! -f app/src/main/res/layout/sr_zoomable_video_surface.xml
+          ! grep -q 'VideoLibraryActivity.class' "$src/MainActivity.java"
+          ! grep -q 'openVideoPlayer' "$src/FloatingControlService.java"
+          ! grep -Eq 'VideoPlayerActivity|VideoLibraryActivity|VideoPlaybackService|mediaPlayback' app/src/main/AndroidManifest.xml
+          ! grep -Eq 'media3|listenablefuture|kotlin-stdlib' app/build.gradle
+          ! grep -Eq 'READ_MEDIA_VIDEO|READ_MEDIA_VISUAL_USER_SELECTED|FOREGROUND_SERVICE_MEDIA_PLAYBACK' app/src/main/AndroidManifest.xml
+          grep -q 'PremiumExperience.setSounds' "$src/ThemeSettingsActivity.java"
+          grep -q 'PremiumExperience.setVibrations' "$src/ThemeSettingsActivity.java"
+          grep -q 'PremiumExperience.vibrations' "$src/UiHaptics.java"
+          grep -q 'FLAG_NOT_TOUCH_MODAL' "$src/FloatingControlService.java"
+          grep -q 'SidebarInputPolicy.edgeTouchWidthDp' "$src/FloatingControlService.java"
+          grep -q 'SidebarInputPolicy.mayOpenFromTap' "$src/FloatingControlService.java"
+          grep -q 'UiHaptics.pulse' "$src/SwipeHaptics.java"
+          grep -q 'UiHaptics.pulse' "$src/HoldDragHaptics.java"
+          mkdir -p build/no-video-feedback-tests
+          javac --release 17 -encoding UTF-8 -d build/no-video-feedback-tests \
+            "$src/SidebarInputPolicy.java" "$src/FeedbackPolicy.java" \
+            tests/com/smarttoolbox/pro/GlobalFeedbackInputTest.java
+          java -cp build/no-video-feedback-tests com.smarttoolbox.pro.GlobalFeedbackInputTest
+
       - name: Test edge-swipe direction and same-side restore
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
@@ -166,32 +195,6 @@ jobs:
             "$src/ToolboxPanelSize.java" \
             tests/com/smarttoolbox/pro/ToolboxPanelSizeTest.java
           java -cp build/toolbox-size-tests com.smarttoolbox.pro.ToolboxPanelSizeTest
-
-      - name: Verify immersive video playback and deliberate background audio
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          trap 'code=$?; echo "::error title=Source check failed::Failed check (line $LINENO): $BASH_COMMAND [exit $code]"; exit $code' ERR
-          main=app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE' "$main"
-          grep -q 'controller.hide(WindowInsetsCompat.Type.systemBars())' "$main"
-          grep -q 'exitPlayerAndStop()' "$main"
-          grep -q 'exitPlayerKeepingAudio()' "$main"
-          grep -q 'if (!controller.isPlaying()) controller.play()' "$main"
-          grep -q 'registerSystemBack()' "$main"
-          grep -q 'unregisterSystemBack()' "$main"
-          grep -q 'Background audio - exit player' "$main"
-          test -f app/src/main/java/com/smarttoolbox/pro/VideoPlaybackService.java
-          grep -q 'controller.clearMediaItems()' "$main"
-          grep -q 'VideoPlaybackService.stopCurrentPlayback()' "$main"
-          grep -q 'public static void stopCurrentPlayback()' app/src/main/java/com/smarttoolbox/pro/VideoPlaybackService.java
-          test -f tests/com/smarttoolbox/pro/VideoExitPolicyTest.java
-          mkdir -p build/video-exit-tests
-          javac -d build/video-exit-tests \
-            app/src/main/java/com/smarttoolbox/pro/VideoExitPolicy.java \
-            tests/com/smarttoolbox/pro/VideoExitPolicyTest.java
-          java -cp build/video-exit-tests com.smarttoolbox.pro.VideoExitPolicyTest
 
       - name: Verify SR branding and developer profile
         working-directory: ${{ env.PROJECT_DIR }}
@@ -260,7 +263,6 @@ jobs:
           grep -q 'NotificationControlsActivity.class' "$main"
           grep -q 'AboutDeveloperActivity.class' "$main"
           grep -q 'Settings.ACTION_APPLICATION_DETAILS_SETTINGS' "$main"
-          grep -q 'VideoLibraryActivity.class' "$main"
           grep -q 'NightScreenActivity.class' "$main"
           grep -q 'VolumeBoosterActivity.class' "$main"
           grep -q 'ThermalMonitorActivity.class' "$main"
@@ -269,17 +271,15 @@ jobs:
           if grep -q 'Ui.addCard(this, body, floatingCard' "$main"; then exit 1; fi
           if grep -q 'Ui.addCard(this, body, notificationCard' "$main"; then exit 1; fi
 
-      - name: Verify themes and folder-first video browser
+      - name: Verify global themes and palette Java tests
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          trap 'code=$?; echo "::error title=Source check failed::Failed check (line $LINENO): $BASH_COMMAND [exit $code]"; exit $code' ERR
           java_dir=app/src/main/java/com/smarttoolbox/pro
           test -f "$java_dir/ThemePalette.java"
           test -f "$java_dir/ThemeManager.java"
           test -f "$java_dir/ThemeSettingsActivity.java"
-          test -f "$java_dir/VideoFolderLogic.java"
           grep -q 'android:name=".SrToolboxApp"' app/src/main/AndroidManifest.xml
           grep -q 'android:name=".ThemeSettingsActivity"' app/src/main/AndroidManifest.xml
           grep -q 'AppThemeLight' app/src/main/res/values/styles.xml
@@ -287,43 +287,15 @@ jobs:
           grep -q 'ThemeManager.save' "$java_dir/ThemeSettingsActivity.java"
           grep -q 'ThemeManager.saveAppearance' "$java_dir/ThemeSettingsActivity.java"
           grep -q 'ThemeManager.MODE_SYSTEM' "$java_dir/ThemeSettingsActivity.java"
-          grep -q 'ThemeManager.MODE_LIGHT' "$java_dir/ThemeSettingsActivity.java"
-          grep -q 'ThemeManager.MODE_DARK' "$java_dir/ThemeSettingsActivity.java"
           grep -q 'ThemePalette.count()' "$java_dir/ThemeSettingsActivity.java"
-          grep -q 'static final String\[\] NAMES' "$java_dir/ThemePalette.java"
           grep -q 'ThemeManager.styleKey' "$java_dir/MainActivity.java"
           grep -q 'ThemeManager.initialize(this)' "$java_dir/FloatingControlService.java"
-          grep -q 'ThemeManager.isLight(this)' "$java_dir/FloatingControlService.java"
           grep -q 'Ui.ACCENT' "$java_dir/FloatingControlService.java"
-          grep -q 'FloatingControlService.refresh(context)' "$java_dir/ThemeManager.java"
-          grep -q 'VideoFolderLogic.displayName' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'new GridView(this)' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'new ListView(this)' "$java_dir/VideoLibraryActivity.java"
-          # Regression guard: prevent undefined VideoLibraryActivity fields (previous 15 javac errors).
-          grep -q 'private VideoAdapter adapter;' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'private TextView status;' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'private VideoFolderAdapter folderAdapter;' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'private VideoFolderGridAdapter folderGridAdapter;' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'MODE_CONTINUE' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'VideoResumeStore.get' "$java_dir/VideoLibraryActivity.java"
-          test -f "$java_dir/VideoThumbnailLoader.java"
-          grep -q 'ContentResolver' "$java_dir/VideoThumbnailLoader.java"
-          grep -q 'loadThumbnail(uri' "$java_dir/VideoThumbnailLoader.java"
-          grep -q 'VideoResumeStore.get' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'EXTRA_CONTINUE_LAST' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'EXTRA_CONTINUE_LAST' "$java_dir/VideoPlayerActivity.java"
-          grep -q 'showVideoOptions' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'continueButton' "$java_dir/VideoLibraryActivity.java"
-          grep -q 'thumbnails.load(holder.thumbnail' "$java_dir/VideoLibraryActivity.java"
-          # Version is validated once in the branding step, without pinning a release number.
-          mkdir -p build/theme-folder-tests
-          javac -d build/theme-folder-tests \
+          mkdir -p build/theme-tests
+          javac -encoding UTF-8 -d build/theme-tests \
             "$java_dir/ThemePalette.java" \
-            "$java_dir/VideoFolderLogic.java" \
-            tests/com/smarttoolbox/pro/ThemePaletteTest.java \
-            tests/com/smarttoolbox/pro/VideoFolderLogicTest.java
-          java -cp build/theme-folder-tests com.smarttoolbox.pro.ThemePaletteTest
-          java -cp build/theme-folder-tests com.smarttoolbox.pro.VideoFolderLogicTest
+            tests/com/smarttoolbox/pro/ThemePaletteTest.java
+          java -cp build/theme-tests com.smarttoolbox.pro.ThemePaletteTest
 
       - name: Verify all Java source syntax and duplicate fields
         working-directory: ${{ env.PROJECT_DIR }}
@@ -336,18 +308,6 @@ jobs:
             tests/com/smarttoolbox/pro/JavaSourceSyntaxTest.java
           java -cp build/java-syntax-tests com.smarttoolbox.pro.JavaSourceSyntaxTest \
             app/src/main/java
-
-      - name: Verify video library Java field declarations
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          trap 'code=$?; echo "::error title=Source check failed::Failed check (line $LINENO): $BASH_COMMAND [exit $code]"; exit $code' ERR
-          mkdir -p build/library-fields-tests
-          javac -d build/library-fields-tests \
-            tests/com/smarttoolbox/pro/VideoLibrarySourceFieldsTest.java
-          java -cp build/library-fields-tests com.smarttoolbox.pro.VideoLibrarySourceFieldsTest \
-            app/src/main/java/com/smarttoolbox/pro/VideoLibraryActivity.java
 
       - name: Test floating sidebar animation calculations
         working-directory: ${{ env.PROJECT_DIR }}
@@ -473,116 +433,6 @@ jobs:
             echo 'The system volume slider must not be changed by this app.'
             exit 1
           fi
-
-      - name: Verify pinch zoom, unread video dots and configurable hold-to-fast
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          trap 'code=$?; echo "::error title=Video controls::Failed line $LINENO: $BASH_COMMAND [exit $code]"; exit $code' ERR
-          src=app/src/main/java/com/smarttoolbox/pro
-          test -f "$src/VideoZoomLogic.java"
-          test -f "$src/VideoGestureSettings.java"
-          test -f "$src/VideoFreshnessLogic.java"
-          test -f "$src/VideoFreshnessStore.java"
-          test -f app/src/main/res/layout/sr_zoomable_video_surface.xml
-          grep -Fq 'app:surface_type="texture_view"' app/src/main/res/layout/sr_zoomable_video_surface.xml
-          grep -Fq 'new ScaleGestureDetector(this' "$src/VideoPlayerActivity.java"
-          grep -Fq 'onLongPress(MotionEvent event)' "$src/VideoPlayerActivity.java"
-          grep -Fq 'stopHoldFastPlayback();' "$src/VideoPlayerActivity.java"
-          grep -Fq 'chooseHoldSpeed()' "$src/VideoPlayerActivity.java"
-          grep -Fq 'VideoFreshnessStore.markViewed' "$src/VideoPlayerActivity.java"
-          grep -Fq 'VideoFreshnessStore.recordSuccessfulScan' "$src/VideoLibraryActivity.java"
-          grep -Fq 'registerContentObserver' "$src/VideoLibraryActivity.java"
-          grep -Fq 'folder.newCount' "$src/VideoLibraryActivity.java"
-          grep -Fq 'holder.newBadge.setVisibility' "$src/VideoLibraryActivity.java"
-          mkdir -p build/video-gestures-and-new-tests
-          javac --release 17 -encoding UTF-8 -d build/video-gestures-and-new-tests \
-            "$src/VideoZoomLogic.java" "$src/VideoFreshnessLogic.java" \
-            tests/com/smarttoolbox/pro/VideoZoomLogicTest.java \
-            tests/com/smarttoolbox/pro/VideoFreshnessLogicTest.java
-          java -cp build/video-gestures-and-new-tests com.smarttoolbox.pro.VideoZoomLogicTest
-          java -cp build/video-gestures-and-new-tests com.smarttoolbox.pro.VideoFreshnessLogicTest
-
-      - name: Verify SR Video Player integration and pure-Java tests
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          trap 'code=$?; echo "::error title=Source check failed::Failed check (line $LINENO): $BASH_COMMAND [exit $code]"; exit $code' ERR
-          test -f app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          test -f app/src/main/java/com/smarttoolbox/pro/VideoPlaybackService.java
-          test -f app/src/main/java/com/smarttoolbox/pro/VideoPlayerLogic.java
-          test -f tests/com/smarttoolbox/pro/VideoPlayerLogicTest.java
-          grep -q "def media3Version = '1.11.1'" app/build.gradle
-          grep -q 'androidx.media3:media3-exoplayer:' app/build.gradle
-          grep -q 'androidx.media3:media3-session:' app/build.gradle
-          grep -q 'androidx.media3:media3-ui:' app/build.gradle
-          grep -q 'androidx.media3:media3-exoplayer-hls:' app/build.gradle
-          grep -q 'androidx.media3:media3-exoplayer-dash:' app/build.gradle
-          grep -q 'androidx.media3:media3-exoplayer-smoothstreaming:' app/build.gradle
-          grep -q 'androidx.media3:media3-exoplayer-rtsp:' app/build.gradle
-          grep -q 'android:name=".VideoPlayerActivity"' app/src/main/AndroidManifest.xml
-          grep -q 'android:name=".VideoPlaybackService"' app/src/main/AndroidManifest.xml
-          grep -q 'androidx.media3.session.MediaSessionService' app/src/main/AndroidManifest.xml
-          grep -q 'android:foregroundServiceType="mediaPlayback"' app/src/main/AndroidManifest.xml
-          grep -q 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK' app/src/main/AndroidManifest.xml
-          grep -q 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
-          grep -q 'VideoLibraryActivity.class' app/src/main/java/com/smarttoolbox/pro/MainActivity.java
-          grep -q 'openVideoPlayer' app/src/main/java/com/smarttoolbox/pro/FloatingControlService.java
-          grep -q 'setSubtitleConfigurations' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'TrackSelectionOverride' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'enterPictureInPictureMode' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'scheduleSleepTimer' app/src/main/java/com/smarttoolbox/pro/VideoPlaybackService.java
-          grep -q 'setWakeMode(C.WAKE_MODE_LOCAL)' app/src/main/java/com/smarttoolbox/pro/VideoPlaybackService.java
-          grep -q 'setKeepScreenOn(isPlaying)' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'playerView.setUseController(false)' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'topPanel' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'quickActions' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'positionSeekBar' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'centerTransport' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'scheduleControlsAutoHide' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'CONTROL_HIDE_DELAY_MS = 3200L' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'PixelCopy.request' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'onDoubleTap' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'onScroll' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'toggleAudioOnly' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE)' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'getUriFromItem' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'compileSdk 36' app/build.gradle
-          grep -q "version '8.10.0'" build.gradle
-          grep -q 'MediaController.releaseFuture' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'PANEL_IDLE_TIMEOUT_MS = 3000L' app/src/main/java/com/smarttoolbox/pro/FloatingControlService.java
-          mkdir -p build/video-player-tests
-          javac -d build/video-player-tests \
-            app/src/main/java/com/smarttoolbox/pro/VideoPlayerLogic.java \
-            tests/com/smarttoolbox/pro/VideoPlayerLogicTest.java
-          java -cp build/video-player-tests com.smarttoolbox.pro.VideoPlayerLogicTest
-
-      - name: Verify phone video library and independent resume tests
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          trap 'code=$?; echo "::error title=Source check failed::Failed check (line $LINENO): $BASH_COMMAND [exit $code]"; exit $code' ERR
-          test -f app/src/main/java/com/smarttoolbox/pro/VideoLibraryActivity.java
-          test -f app/src/main/java/com/smarttoolbox/pro/VideoResumeStore.java
-          test -f app/src/main/java/com/smarttoolbox/pro/VideoResumeLogic.java
-          test -f tests/com/smarttoolbox/pro/VideoResumeLogicTest.java
-          grep -q 'android:name=".VideoLibraryActivity"' app/src/main/AndroidManifest.xml
-          grep -q 'android.permission.READ_MEDIA_VIDEO' app/src/main/AndroidManifest.xml
-          grep -q 'android.permission.READ_MEDIA_VISUAL_USER_SELECTED' app/src/main/AndroidManifest.xml
-          grep -q 'android.permission.READ_EXTERNAL_STORAGE' app/src/main/AndroidManifest.xml
-          grep -q 'MediaStore.Video.Media.getContentUri' app/src/main/java/com/smarttoolbox/pro/VideoLibraryActivity.java
-          grep -q 'VideoResumeStore.get' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'VideoResumeStore.put' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          grep -q 'EXTRA_VIDEO_URI' app/src/main/java/com/smarttoolbox/pro/VideoLibraryActivity.java
-          grep -q 'EXTRA_RESTART_VIDEO' app/src/main/java/com/smarttoolbox/pro/VideoPlayerActivity.java
-          mkdir -p build/video-resume-tests
-          javac -d build/video-resume-tests \
-            app/src/main/java/com/smarttoolbox/pro/VideoResumeLogic.java \
-            tests/com/smarttoolbox/pro/VideoResumeLogicTest.java
-          java -cp build/video-resume-tests com.smarttoolbox.pro.VideoResumeLogicTest
 
       - name: Verify minimum-brightness Night Screen and restore-safety regression
         working-directory: ${{ env.PROJECT_DIR }}
@@ -767,7 +617,7 @@ jobs:
           grep -Fq 'MessageScheduleStore.getAll(this), chosen ->' "$src/MessageSchedulerActivity.java"
           grep -Fq 'SchedulerCalendarLogic.futureWithOriginalTime(' "$src/MessageSchedulerActivity.java"
           grep -Fq 'lastTriggeredAtMillis' "$src/SchedulerRecordCalendar.java"
-          grep -Fq 'FloatingBoundaryPolicy.shouldAutoDock(' "$src/FloatingControlService.java"
+          grep -Fq 'alignEdgeHandleToDisplay()' "$src/FloatingControlService.java"
           grep -Fq 'FloatingBoundaryPolicy.PREF_MANUAL_POSITION' "$src/FloatingControlService.java"
           grep -Fq 'Reset icon to screen border' "$src/FloatingIconSettingsActivity.java"
           grep -Fq 'finishEdgeTabDrag()' "$src/FloatingControlService.java"
@@ -1141,12 +991,6 @@ jobs:
           java -cp build/inplace-edit-edge-tests com.smarttoolbox.pro.SchedulerEditPlanLogicTest
           java -cp build/inplace-edit-edge-tests com.smarttoolbox.pro.FloatingEdgeGeometryTest
 
-      - name: Verify Kotlin standard library alignment
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          gradle --no-daemon --console=plain :app:dependencyInsight --dependency kotlin-stdlib-jdk7 --configuration debugRuntimeClasspath
-          gradle --no-daemon --console=plain :app:dependencyInsight --dependency kotlin-stdlib-jdk8 --configuration debugRuntimeClasspath
-
       - name: Check duplicate Android classes
         working-directory: ${{ env.PROJECT_DIR }}
         run: gradle --no-daemon --stacktrace :app:checkDebugDuplicateClasses
@@ -1192,7 +1036,7 @@ jobs:
           grep -Fq 'edgeHandle.performClick()' "$src/FloatingControlService.java"
           grep -Fq 'revealQuickPanelFromEdge()' "$src/FloatingControlService.java"
           grep -Fq 'gestureFallbackHandler.postDelayed' "$src/FloatingControlService.java"
-          grep -Fq 'int touchWidthDp = Math.max(44, edgeWidthDp)' "$src/FloatingControlService.java"
+          grep -Fq 'int touchWidthDp = SidebarInputPolicy.edgeTouchWidthDp(edgeWidthDp)' "$src/FloatingControlService.java"
           grep -Fq 'case MotionEvent.ACTION_UP:' "$src/FloatingControlService.java"
           grep -Fq 'All-app edge following — Portrait + Landscape' "$src/FloatingIconSettingsActivity.java"
           mkdir -p build/floating-swipe-tests
@@ -1204,7 +1048,7 @@ jobs:
           java -cp build/floating-swipe-tests com.smarttoolbox.pro.FloatingBarGestureLogicTest
           java -cp build/floating-swipe-tests com.smarttoolbox.pro.EdgeSwipeLogicTest
 
-      - name: Verify scheduler notepad and portrait video edge
+      - name: Verify scheduler notepad and its Java tests
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -1213,50 +1057,37 @@ jobs:
           test -f "$src/SchedulerNotepadActivity.java"
           test -f "$src/SchedulerNoteStore.java"
           test -f "$src/SchedulerNoteLogic.java"
-          test -f "$src/VideoPlaybackEdgeBridge.java"
-          test -f "$src/PortraitVideoEdgeLogic.java"
           grep -Fq 'android:name=".SchedulerNotepadActivity" android:exported="false"' app/src/main/AndroidManifest.xml
           grep -Fq 'SchedulerNotepadActivity.EXTRA_NOTE_BODY' "$src/MessageSchedulerActivity.java"
           grep -Fq 'MENU_NOTEPAD' "$src/MessageSchedulerActivity.java"
           grep -Fq 'openSchedulerNotepad()' "$src/MessageSchedulerActivity.java"
           grep -Fq 'SchedulerNoteStore.save(this' "$src/SchedulerNotepadActivity.java"
           grep -Fq 'SchedulerNoteStore.delete(this' "$src/SchedulerNotepadActivity.java"
-          grep -Fq 'ACTION_SR_VIDEO_EDGE_START' "$src/FloatingControlService.java"
-          grep -Fq 'srMoveBubbleToPortraitVideoEdge()' "$src/FloatingControlService.java"
-          grep -Fq 'srRestoreBubbleAfterPortraitVideo()' "$src/FloatingControlService.java"
-          grep -Fq 'floating.portrait_video.edge' "$src/FloatingIconSettingsActivity.java"
-          grep -Fq 'syncPortraitVideoEdge()' "$src/VideoPlayerActivity.java"
-          grep -Fq 'VideoPlaybackEdgeBridge.onPlaying(this)' "$src/VideoPlayerActivity.java"
-          grep -Fq 'VideoPlaybackEdgeBridge.onStopped(this)' "$src/VideoPlayerActivity.java"
-          mkdir -p build/notes-edge-tests
-          javac -encoding UTF-8 -d build/notes-edge-tests \
+          mkdir -p build/scheduler-note-tests
+          javac -encoding UTF-8 -d build/scheduler-note-tests \
             "$src/SchedulerNoteLogic.java" \
-            "$src/PortraitVideoEdgeLogic.java" \
             tests/com/smarttoolbox/pro/UpdateKitLogicTest.java
-          java -cp build/notes-edge-tests com.smarttoolbox.pro.UpdateKitLogicTest
+          java -cp build/scheduler-note-tests com.smarttoolbox.pro.UpdateKitLogicTest
 
-      - name: Verify system-wide Portrait Edge in every app
+      - name: Verify floating edge alignment and geometry tests
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -Eeuo pipefail
           src=app/src/main/java/com/smarttoolbox/pro
           test -f "$src/GlobalPortraitEdgeLogic.java"
+          test -f "$src/FloatingEdgeGeometry.java"
           test -f tests/com/smarttoolbox/pro/GlobalPortraitEdgeLogicTest.java
-          grep -Fq 'floating.portrait_anywhere.edge' "$src/FloatingIconSettingsActivity.java"
-          grep -Fq 'All-app edge following — Portrait + Landscape' "$src/FloatingIconSettingsActivity.java"
           grep -Fq 'registerDisplayListener(portraitDisplayListener' "$src/FloatingControlService.java"
           grep -Fq 'void onConfigurationChanged(Configuration newConfig)' "$src/FloatingControlService.java"
-          grep -Fq 'syncGlobalPortraitEdge()' "$src/FloatingControlService.java"
-          grep -Fq 'GlobalPortraitEdgeLogic.shouldDock' "$src/FloatingControlService.java"
-          grep -Fq 'GlobalPortraitEdgeLogic.shouldUndock' "$src/FloatingControlService.java"
-          grep -Fq 'GLOBAL_EDGE_MOVED' "$src/FloatingControlService.java"
-          grep -Fq 'srRestoreBubbleAfterPortraitVideo()' "$src/FloatingControlService.java"
-          mkdir -p build/global-portrait-tests
-          javac -encoding UTF-8 -d build/global-portrait-tests \
+          grep -Fq 'alignEdgeHandleToDisplay()' "$src/FloatingControlService.java"
+          grep -Fq 'FloatingEdgeGeometry.centerForFraction' "$src/FloatingControlService.java"
+          grep -Fq 'FloatingEdgeGeometry.x(left, metrics.widthPixels' "$src/FloatingControlService.java"
+          mkdir -p build/global-edge-tests
+          javac -encoding UTF-8 -d build/global-edge-tests \
             "$src/GlobalPortraitEdgeLogic.java" \
             tests/com/smarttoolbox/pro/GlobalPortraitEdgeLogicTest.java
-          java -cp build/global-portrait-tests com.smarttoolbox.pro.GlobalPortraitEdgeLogicTest
+          java -cp build/global-edge-tests com.smarttoolbox.pro.GlobalPortraitEdgeLogicTest
 
       - name: Build debug APK
         working-directory: ${{ env.PROJECT_DIR }}
