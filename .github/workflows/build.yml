@@ -474,6 +474,36 @@ jobs:
             exit 1
           fi
 
+      - name: Verify pinch zoom, unread video dots and configurable hold-to-fast
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'code=$?; echo "::error title=Video controls::Failed line $LINENO: $BASH_COMMAND [exit $code]"; exit $code' ERR
+          src=app/src/main/java/com/smarttoolbox/pro
+          test -f "$src/VideoZoomLogic.java"
+          test -f "$src/VideoGestureSettings.java"
+          test -f "$src/VideoFreshnessLogic.java"
+          test -f "$src/VideoFreshnessStore.java"
+          test -f app/src/main/res/layout/sr_zoomable_video_surface.xml
+          grep -Fq 'app:surface_type="texture_view"' app/src/main/res/layout/sr_zoomable_video_surface.xml
+          grep -Fq 'new ScaleGestureDetector(this' "$src/VideoPlayerActivity.java"
+          grep -Fq 'onLongPress(MotionEvent event)' "$src/VideoPlayerActivity.java"
+          grep -Fq 'stopHoldFastPlayback();' "$src/VideoPlayerActivity.java"
+          grep -Fq 'chooseHoldSpeed()' "$src/VideoPlayerActivity.java"
+          grep -Fq 'VideoFreshnessStore.markViewed' "$src/VideoPlayerActivity.java"
+          grep -Fq 'VideoFreshnessStore.recordSuccessfulScan' "$src/VideoLibraryActivity.java"
+          grep -Fq 'registerContentObserver' "$src/VideoLibraryActivity.java"
+          grep -Fq 'folder.newCount' "$src/VideoLibraryActivity.java"
+          grep -Fq 'holder.newBadge.setVisibility' "$src/VideoLibraryActivity.java"
+          mkdir -p build/video-gestures-and-new-tests
+          javac --release 17 -encoding UTF-8 -d build/video-gestures-and-new-tests \
+            "$src/VideoZoomLogic.java" "$src/VideoFreshnessLogic.java" \
+            tests/com/smarttoolbox/pro/VideoZoomLogicTest.java \
+            tests/com/smarttoolbox/pro/VideoFreshnessLogicTest.java
+          java -cp build/video-gestures-and-new-tests com.smarttoolbox.pro.VideoZoomLogicTest
+          java -cp build/video-gestures-and-new-tests com.smarttoolbox.pro.VideoFreshnessLogicTest
+
       - name: Verify SR Video Player integration and pure-Java tests
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
